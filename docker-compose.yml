@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: mluser
+      POSTGRES_PASSWORD: mlpassword
+      POSTGRES_DB: oil_gas
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mluser -d oil_gas"]
+      interval: 5s
+      retries: 5
+    networks:
+      - bigdata_network
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      retries: 5
+    networks:
+      - bigdata_network
+
+  jupyter:
+    image: jupyter/datascience-notebook:latest
+    container_name: jupyter
+    environment:
+      JUPYTER_TOKEN: easy
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./jupyter/notebooks:/home/jovyan/work
+    command: start-notebook.sh --NotebookApp.token='easy' --NotebookApp.password=''
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - bigdata_network
+
+  superset:
+    build: ./superset
+    container_name: superset
+    environment:
+      SUPERSET_SECRET_KEY: 'your-secret-key-here'
+      SUPERSET_CONFIG_PATH: /app/superset_config.py
+    ports:
+      - "8098:8088"
+    volumes:
+      - superset_data:/app/superset_home
+      - ./superset_config.py:/app/superset_config.py
+    entrypoint: >
+      bash -c "
+      superset db upgrade &&
+      superset fab create-admin --username admin --firstname Admin --lastname User --email admin@superset.com --password admin &&
+      superset init &&
+      superset run -p 8088 --host 0.0.0.0 --with-threads --reload --debugger
+      "
+    depends_on:
+      - postgres
+    networks:
+      - bigdata_network
+
+volumes:
+  pgdata:
+  minio_data:
+  superset_data:
+
+networks:
+  bigdata_network:
+    driver: bridge
